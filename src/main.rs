@@ -35,7 +35,7 @@ fn build_csp(config: &Config) -> header::HeaderValue {
     };
 
     format!(
-        "default-src 'none'; style-src 'unsafe-inline'; {img_src} form-action 'self'; frame-ancestors 'none'"
+        "default-src 'none'; style-src 'unsafe-inline'; {img_src} frame-ancestors 'none'"
     )
     .parse()
     .unwrap()
