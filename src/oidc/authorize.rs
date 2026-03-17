@@ -1,6 +1,6 @@
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
-use axum::response::{Html, Redirect, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::Form;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
 
-use crate::config::Config;
+use crate::config::{Branding, Config};
 use crate::jwt::{self, SessionClaims, SigningKeys};
 use crate::store::{Store, TwoFactorSession};
 use crate::vf_client::{SigninResult, VfClient, VfUserProfile};
@@ -85,22 +85,27 @@ pub async fn authorize_get(
     let scope = params.scope.unwrap_or_else(|| "openid profile email".to_string());
     let state = params.state;
     let nonce = params.nonce;
+    let branding = &app.config.branding;
 
     if !app.config.is_valid_client(&client_id) {
-        return Html(error_page("Invalid client_id")).into_response();
+        return Html(error_page(branding, "Ungültige Client-ID")).into_response();
     }
     if response_type != "code" {
-        return Html(error_page("Unsupported response_type. Only 'code' is supported."))
-            .into_response();
+        return Html(error_page(
+            branding,
+            "Nicht unterstützter Antworttyp. Nur 'code' wird unterstützt.",
+        ))
+        .into_response();
     }
     if !app.config.is_redirect_uri_allowed(&client_id, &redirect_uri) {
         warn!("Rejected redirect_uri not in allowlist: {redirect_uri}");
-        return Html(error_page("Invalid redirect_uri")).into_response();
+        return Html(error_page(branding, "Ungültige Weiterleitungs-URI")).into_response();
     }
 
     // Check for an existing SSO session in the cookie
     if let Some(session) = read_session(&app.keys, &headers) {
         return Html(continue_page(
+            branding,
             &session.name,
             &session.email,
             &redirect_uri,
@@ -113,6 +118,7 @@ pub async fn authorize_get(
     }
 
     Html(login_page(
+        branding,
         &redirect_uri,
         &client_id,
         &scope,
@@ -128,12 +134,14 @@ pub async fn authorize_post(
     State(app): State<Arc<AppState>>,
     Form(form): Form<LoginForm>,
 ) -> Response {
+    let branding = &app.config.branding;
+
     if !app.config.is_valid_client(&form.client_id) {
-        return Html(error_page("Invalid client_id")).into_response();
+        return Html(error_page(branding, "Ungültige Client-ID")).into_response();
     }
     if !app.config.is_redirect_uri_allowed(&form.client_id, &form.redirect_uri) {
         warn!("Rejected redirect_uri not in allowlist: {}", form.redirect_uri);
-        return Html(error_page("Invalid redirect_uri")).into_response();
+        return Html(error_page(branding, "Ungültige Weiterleitungs-URI")).into_response();
     }
 
     let accesstoken = match app.vf_client.get_access_token().await {
@@ -141,12 +149,13 @@ pub async fn authorize_post(
         Err(e) => {
             warn!("VF accesstoken error: {e}");
             return Html(login_page(
+                branding,
                 &form.redirect_uri,
                 &form.client_id,
                 &form.scope,
                 form.state.as_deref(),
                 form.nonce.as_deref(),
-                Some("Failed to connect to Vereinsflieger. Please try again."),
+                Some("Verbindung zu Vereinsflieger fehlgeschlagen. Bitte versuchen Sie es erneut."),
             ))
             .into_response();
         }
@@ -162,12 +171,13 @@ pub async fn authorize_post(
         Err(e) => {
             warn!("VF signin error: {e}");
             return Html(login_page(
+                branding,
                 &form.redirect_uri,
                 &form.client_id,
                 &form.scope,
                 form.state.as_deref(),
                 form.nonce.as_deref(),
-                Some("Failed to connect to Vereinsflieger. Please try again."),
+                Some("Verbindung zu Vereinsflieger fehlgeschlagen. Bitte versuchen Sie es erneut."),
             ))
             .into_response();
         }
@@ -191,18 +201,19 @@ pub async fn authorize_post(
                 },
             );
             info!("2FA required, created session {session_id}");
-            Html(two_factor_page(&session_id, None)).into_response()
+            Html(two_factor_page(branding, &session_id, None)).into_response()
         }
         SigninResult::Failed(msg) => {
             warn!("VF login failed: {msg}");
             app.vf_client.signout(&accesstoken).await;
             Html(login_page(
+                branding,
                 &form.redirect_uri,
                 &form.client_id,
                 &form.scope,
                 form.state.as_deref(),
                 form.nonce.as_deref(),
-                Some("Invalid username or password."),
+                Some("Benutzername oder Passwort ungültig."),
             ))
             .into_response()
         }
@@ -226,11 +237,14 @@ pub async fn authorize_2fa_post(
     State(app): State<Arc<AppState>>,
     Form(form): Form<TwoFactorForm>,
 ) -> Response {
+    let branding = &app.config.branding;
+
     let session = match app.store.take_2fa_session(&form.session_id) {
         Some(s) => s,
         None => {
             return Html(error_page(
-                "Your two-factor session has expired. Please sign in again.",
+                branding,
+                "Ihre Zwei-Faktor-Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
             ))
             .into_response();
         }
@@ -250,8 +264,9 @@ pub async fn authorize_2fa_post(
         Err(e) => {
             warn!("VF 2FA signin error: {e}");
             return Html(two_factor_page(
+                branding,
                 &form.session_id,
-                Some("Failed to verify code. Please try again."),
+                Some("Code konnte nicht überprüft werden. Bitte versuchen Sie es erneut."),
             ))
             .into_response();
         }
@@ -287,11 +302,19 @@ pub async fn authorize_2fa_post(
                     created_at: session.created_at,
                 },
             );
-            Html(two_factor_page(&session_id, Some("Invalid authentication code.")))
-                .into_response()
+            Html(two_factor_page(
+                branding,
+                &session_id,
+                Some("Ungültiger Authentifizierungscode."),
+            ))
+            .into_response()
         }
         SigninResult::TwoFactorRequired => {
-            Html(error_page("Unexpected 2FA state. Please try again.")).into_response()
+            Html(error_page(
+                branding,
+                "Unerwarteter 2FA-Zustand. Bitte versuchen Sie es erneut.",
+            ))
+            .into_response()
         }
     }
 }
@@ -303,17 +326,23 @@ pub async fn authorize_continue(
     headers: HeaderMap,
     Form(form): Form<ContinueForm>,
 ) -> Response {
+    let branding = &app.config.branding;
+
     if !app.config.is_valid_client(&form.client_id) {
-        return Html(error_page("Invalid client_id")).into_response();
+        return Html(error_page(branding, "Ungültige Client-ID")).into_response();
     }
     if !app.config.is_redirect_uri_allowed(&form.client_id, &form.redirect_uri) {
-        return Html(error_page("Invalid redirect_uri")).into_response();
+        return Html(error_page(branding, "Ungültige Weiterleitungs-URI")).into_response();
     }
 
     let session = match read_session(&app.keys, &headers) {
         Some(s) => s,
         None => {
-            return Html(error_page("Session expired. Please sign in again.")).into_response();
+            return Html(error_page(
+                branding,
+                "Sitzung abgelaufen. Bitte melden Sie sich erneut an.",
+            ))
+            .into_response();
         }
     };
 
@@ -325,6 +354,7 @@ pub async fn authorize_continue(
     };
 
     issue_code_and_redirect(
+        branding,
         &app.store,
         user,
         &form.redirect_uri,
@@ -337,14 +367,20 @@ pub async fn authorize_continue(
 
 /// GET /logout - Clear the SSO session cookie.
 pub async fn logout(State(app): State<Arc<AppState>>) -> Response {
+    let branding = &app.config.branding;
     let mut response = Html(render_page(
-        "Signed Out",
-        r#"<h1>Signed Out</h1>
-        <p class="subtitle">You have been signed out of Vereinsflieger SSO.</p>"#,
+        "Abgemeldet",
+        branding,
+        r#"<h1>Abgemeldet</h1>
+        <p class="subtitle">Sie wurden erfolgreich abgemeldet.</p>"#,
     ))
     .into_response();
 
-    let secure = if app.config.issuer_url.starts_with("https") { "; Secure" } else { "" };
+    let secure = if app.config.issuer_url.starts_with("https") {
+        "; Secure"
+    } else {
+        ""
+    };
     response.headers_mut().insert(
         "Set-Cookie",
         format!("{SESSION_COOKIE}=; Path=/authorize; Max-Age=0; HttpOnly; SameSite=Lax{secure}")
@@ -366,13 +402,18 @@ async fn complete_auth(
     state: Option<&str>,
     nonce: Option<&str>,
 ) -> Response {
+    let branding = &app.config.branding;
+
     let user = match app.vf_client.get_user(accesstoken).await {
         Ok(u) => u,
         Err(e) => {
             warn!("VF getuser error: {e}");
             app.vf_client.signout(accesstoken).await;
-            return Html(error_page("Failed to retrieve your profile from Vereinsflieger."))
-                .into_response();
+            return Html(error_page(
+                branding,
+                "Ihr Profil konnte nicht von Vereinsflieger abgerufen werden.",
+            ))
+            .into_response();
         }
     };
 
@@ -401,12 +442,17 @@ async fn complete_auth(
         Ok(t) => t,
         Err(e) => {
             warn!("Failed to sign session JWT: {e}");
-            return Html(error_page("Internal error creating session.")).into_response();
+            return Html(error_page(
+                branding,
+                "Interner Fehler beim Erstellen der Sitzung.",
+            ))
+            .into_response();
         }
     };
 
     // Issue the auth code and build the redirect
     let mut response = issue_code_and_redirect(
+        branding,
         &app.store,
         user,
         redirect_uri,
@@ -421,7 +467,11 @@ async fn complete_auth(
     // bridge's authorize endpoints and not to other services on the same
     // hostname (cookies are NOT port-scoped).
     let max_age = app.config.session_ttl_secs;
-    let secure = if app.config.issuer_url.starts_with("https") { "; Secure" } else { "" };
+    let secure = if app.config.issuer_url.starts_with("https") {
+        "; Secure"
+    } else {
+        ""
+    };
     response.headers_mut().insert(
         "Set-Cookie",
         format!(
@@ -437,6 +487,7 @@ async fn complete_auth(
 /// Issue an authorization code for the given user and build a redirect
 /// response back to the client.
 fn issue_code_and_redirect(
+    branding: &Branding,
     store: &Store,
     user: VfUserProfile,
     redirect_uri: &str,
@@ -461,7 +512,7 @@ fn issue_code_and_redirect(
         Ok(u) => u,
         Err(e) => {
             warn!("Failed to parse redirect_uri: {e}");
-            return Html(error_page("Invalid redirect URI.")).into_response();
+            return Html(error_page(branding, "Ungültige Weiterleitungs-URI.")).into_response();
         }
     };
     redirect_url.query_pairs_mut().append_pair("code", &code);
@@ -476,8 +527,6 @@ fn issue_code_and_redirect(
 // ---------------------------------------------------------------------------
 // Cookie helpers
 // ---------------------------------------------------------------------------
-
-use axum::response::IntoResponse;
 
 /// Extract a cookie value from the request headers by name.
 fn extract_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -506,14 +555,29 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
-fn render_page(title: &str, content: &str) -> String {
+fn render_page(page_title: &str, branding: &Branding, content: &str) -> String {
+    let brand_html = match &branding.logo_url {
+        Some(url) => format!(
+            r#"<img src="{}" alt="{}" class="logo">"#,
+            html_escape(url),
+            html_escape(&branding.title),
+        ),
+        None => format!(
+            r#"<div class="brand">{}</div>"#,
+            html_escape(&branding.title),
+        ),
+    };
+
+    let title = html_escape(page_title);
+    let brand_title = html_escape(&branding.title);
+
     format!(
         r#"<!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{title}</title>
+    <title>{title} – {brand_title}</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -521,6 +585,8 @@ fn render_page(title: &str, content: &str) -> String {
                min-height: 100vh; color: #333; }}
         .card {{ background: #fff; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);
                  padding: 40px; width: 100%; max-width: 400px; }}
+        .logo {{ display: block; max-height: 48px; margin: 0 auto 24px; }}
+        .brand {{ text-align: center; font-size: 16px; font-weight: 600; color: #666; margin-bottom: 8px; }}
         h1 {{ font-size: 20px; font-weight: 600; margin-bottom: 24px; text-align: center; }}
         .subtitle {{ font-size: 14px; color: #666; text-align: center; margin-bottom: 24px; }}
         .field {{ margin-bottom: 16px; }}
@@ -548,6 +614,7 @@ fn render_page(title: &str, content: &str) -> String {
 </head>
 <body>
     <div class="card">
+        {brand_html}
         {content}
     </div>
 </body>
@@ -556,6 +623,7 @@ fn render_page(title: &str, content: &str) -> String {
 }
 
 fn login_page(
+    branding: &Branding,
     redirect_uri: &str,
     client_id: &str,
     scope: &str,
@@ -578,9 +646,10 @@ fn login_page(
         .unwrap_or_default();
 
     render_page(
-        "Sign in with Vereinsflieger",
+        "Anmelden",
+        branding,
         &format!(
-            r#"<h1>Sign in with Vereinsflieger</h1>
+            r#"<h1>Anmelden</h1>
         {error_html}
         <form method="POST" action="/authorize">
             <input type="hidden" name="redirect_uri" value="{redirect_uri}">
@@ -589,20 +658,21 @@ fn login_page(
             {state_field}
             {nonce_field}
             <div class="field">
-                <label for="username">Username or Email</label>
+                <label for="username">Benutzername oder E-Mail</label>
                 <input type="text" id="username" name="username" required autofocus>
             </div>
             <div class="field">
-                <label for="password">Password</label>
+                <label for="password">Passwort</label>
                 <input type="password" id="password" name="password" required>
             </div>
-            <button type="submit">Sign In</button>
+            <button type="submit">Anmelden</button>
         </form>"#
         ),
     )
 }
 
 fn continue_page(
+    branding: &Branding,
     name: &str,
     email: &str,
     redirect_uri: &str,
@@ -624,9 +694,10 @@ fn continue_page(
         .unwrap_or_default();
 
     render_page(
-        "Continue with Vereinsflieger",
+        "Willkommen zurück",
+        branding,
         &format!(
-            r#"<h1>Continue with Vereinsflieger</h1>
+            r#"<h1>Willkommen zurück</h1>
         <div class="user-info">
             <div class="name">{name}</div>
             <div class="email">{email}</div>
@@ -637,45 +708,47 @@ fn continue_page(
             <input type="hidden" name="scope" value="{scope}">
             {state_field}
             {nonce_field}
-            <button type="submit">Continue as {name}</button>
+            <button type="submit">Weiter als {name}</button>
         </form>
-        <a href="/logout" class="btn btn-secondary">Use a different account</a>"#
+        <a href="/logout" class="btn btn-secondary">Anderes Konto verwenden</a>"#
         ),
     )
 }
 
-fn two_factor_page(session_id: &str, error: Option<&str>) -> String {
+fn two_factor_page(branding: &Branding, session_id: &str, error: Option<&str>) -> String {
     let error_html = error
         .map(|e| format!(r#"<div class="error">{}</div>"#, html_escape(e)))
         .unwrap_or_default();
     let session_id = html_escape(session_id);
 
     render_page(
-        "Two-Factor Authentication",
+        "Zwei-Faktor-Authentifizierung",
+        branding,
         &format!(
-            r#"<h1>Two-Factor Authentication</h1>
-        <p class="subtitle">Enter the code from your authenticator app.</p>
+            r#"<h1>Zwei-Faktor-Authentifizierung</h1>
+        <p class="subtitle">Geben Sie den Code aus Ihrer Authenticator-App ein.</p>
         {error_html}
         <form method="POST" action="/authorize/2fa">
             <input type="hidden" name="session_id" value="{session_id}">
             <div class="field">
-                <label for="auth_secret">Authentication Code</label>
+                <label for="auth_secret">Authentifizierungscode</label>
                 <input type="text" id="auth_secret" name="auth_secret" class="code-input" required autofocus
                        autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]*">
             </div>
-            <button type="submit">Verify</button>
+            <button type="submit">Bestätigen</button>
         </form>"#
         ),
     )
 }
 
-fn error_page(message: &str) -> String {
+fn error_page(branding: &Branding, message: &str) -> String {
     let message = html_escape(message);
     render_page(
-        "Error",
+        "Fehler",
+        branding,
         &format!(
             r#"<div class="error-page">
-        <h1>Error</h1>
+        <h1>Fehler</h1>
         <p>{message}</p>
     </div>"#
         ),

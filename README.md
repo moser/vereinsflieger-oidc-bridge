@@ -66,6 +66,13 @@ Register one or more OIDC/OAuth2 clients. Each entry needs:
 
 You can register multiple clients by repeating the `[[clients]]` section.
 
+#### `[branding]` (optional)
+
+| Key | Required | Default | Description |
+|-----|----------|---------|-------------|
+| `title` | no | `Vereinsflieger` | Organization or service name shown on the login pages and in the browser tab. |
+| `logo_url` | no | — | URL to a logo image displayed above the login form. If omitted, the title is shown as text instead. |
+
 #### Example
 
 ```toml
@@ -74,6 +81,10 @@ issuer_url = "https://sso.example.com"
 
 [vereinsflieger]
 appkey = "your-vereinsflieger-appkey"
+
+[branding]
+title = "Flugverein Beispiel"
+logo_url = "https://example.com/logo.png"
 
 [[clients]]
 client_id = "nextcloud"

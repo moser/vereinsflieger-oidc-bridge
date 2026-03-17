@@ -9,6 +9,10 @@ issuer_url = "http://localhost:8080"
 appkey = "your-vereinsflieger-appkey"
 # cid = "your-club-id"              # optional, only needed for multi-club users
 
+# [branding]
+# title = "Vereinsflieger"                   # shown on login pages, default
+# logo_url = "https://example.com/logo.png"  # optional, shown above the login form
+
 [[clients]]
 client_id = "some-app"
 client_secret = "change-me-to-a-random-secret"

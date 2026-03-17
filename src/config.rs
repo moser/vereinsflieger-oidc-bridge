@@ -11,6 +11,7 @@ struct ConfigFile {
     vereinsflieger: VereinsfliegerSection,
     #[serde(rename = "clients")]
     clients: Vec<ClientEntry>,
+    branding: Option<BrandingSection>,
 }
 
 /// Server configuration from the `[server]` section.
@@ -31,12 +32,28 @@ struct VereinsfliegerSection {
     cid: Option<String>,
 }
 
+/// Branding configuration from the optional `[branding]` section.
+#[derive(Debug, Deserialize)]
+struct BrandingSection {
+    title: Option<String>,
+    logo_url: Option<String>,
+}
+
 /// A registered OAuth2/OIDC client from `[[clients]]`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClientEntry {
     pub client_id: String,
     pub client_secret: String,
     pub allowed_redirect_uris: Vec<String>,
+}
+
+/// Branding settings for the login UI.
+#[derive(Debug, Clone)]
+pub struct Branding {
+    /// Organization or service name shown on login pages.
+    pub title: String,
+    /// Optional URL to a logo image displayed above the login form.
+    pub logo_url: Option<String>,
 }
 
 /// Application configuration loaded from a TOML file.
@@ -60,6 +77,8 @@ pub struct Config {
     pub key_path: String,
     /// Registered clients indexed by client_id for fast lookup.
     clients: HashMap<String, ClientEntry>,
+    /// Branding settings for the login UI.
+    pub branding: Branding,
 }
 
 impl Config {
@@ -107,6 +126,14 @@ impl Config {
                 .key_path
                 .unwrap_or_else(|| "/data/signing_key.pem".to_string()),
             clients,
+            branding: Branding {
+                title: file
+                    .branding
+                    .as_ref()
+                    .and_then(|b| b.title.clone())
+                    .unwrap_or_else(|| "Vereinsflieger".to_string()),
+                logo_url: file.branding.as_ref().and_then(|b| b.logo_url.clone()),
+            },
         }
     }
 
