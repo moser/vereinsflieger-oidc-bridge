@@ -7,7 +7,6 @@ mod vf_client;
 use axum::extract::Request;
 use axum::http::header;
 use axum::middleware::{self, Next};
-use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
 use std::sync::Arc;
@@ -21,15 +20,25 @@ use oidc::token::TokenState;
 use store::Store;
 use vf_client::VfClient;
 
-async fn security_headers(request: Request, next: Next) -> Response {
-    let mut response = next.run(request).await;
-    response.headers_mut().insert(
-        header::CONTENT_SECURITY_POLICY,
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
-            .parse()
-            .unwrap(),
-    );
-    response
+fn build_csp(config: &Config) -> header::HeaderValue {
+    let img_src = match &config.branding.logo_url {
+        Some(url) => {
+            let origin = url::Url::parse(url)
+                .ok()
+                .map(|u| format!("{}://{}", u.scheme(), u.authority()));
+            match origin {
+                Some(o) => format!("img-src {o};"),
+                None => String::new(),
+            }
+        }
+        None => String::new(),
+    };
+
+    format!(
+        "default-src 'none'; style-src 'unsafe-inline'; {img_src} form-action 'self'; frame-ancestors 'none'"
+    )
+    .parse()
+    .unwrap()
 }
 
 #[tokio::main]
@@ -105,7 +114,19 @@ async fn main() {
                 .with_state(keys.clone()),
         )
         .route("/health", get(|| async { "OK" }))
-        .layer(middleware::from_fn(security_headers))
+        .layer(middleware::from_fn({
+            let csp = build_csp(&config);
+            move |request: Request, next: Next| {
+                let csp = csp.clone();
+                async move {
+                    let mut response = next.run(request).await;
+                    response
+                        .headers_mut()
+                        .insert(header::CONTENT_SECURITY_POLICY, csp);
+                    response
+                }
+            }
+        }))
         .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(config.listen_addr)
