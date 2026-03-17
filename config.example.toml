@@ -1,0 +1,26 @@
+[server]
+issuer_url = "http://localhost:8080"
+# listen_addr = "0.0.0.0:8080"       # default
+# key_path = "/data/signing_key.pem" # default
+# auth_code_ttl = 60                 # seconds, default
+# access_token_ttl = 3600            # seconds, default
+
+[vereinsflieger]
+appkey = "your-vereinsflieger-appkey"
+# cid = "your-club-id"              # optional, only needed for multi-club users
+
+[[clients]]
+client_id = "some-app"
+client_secret = "change-me-to-a-random-secret"
+allowed_redirect_uris = [
+    "http://localhost:3000/auth/oidc.callback",
+]
+
+# Add more clients as needed:
+#
+# [[clients]]
+# client_id = "another-app"
+# client_secret = "another-secret"
+# allowed_redirect_uris = [
+#     "https://other-app.example.com/callback",
+# ]
