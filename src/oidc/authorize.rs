@@ -486,6 +486,7 @@ async fn complete_auth(
 
 /// Issue an authorization code for the given user and build a redirect
 /// response back to the client.
+#[allow(clippy::too_many_arguments)]
 fn issue_code_and_redirect(
     branding: &Branding,
     store: &Store,
@@ -671,6 +672,7 @@ fn login_page(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn continue_page(
     branding: &Branding,
     name: &str,
